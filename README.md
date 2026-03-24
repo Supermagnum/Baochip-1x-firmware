@@ -29,6 +29,11 @@ This document outlines firmware for **USB hardware security tokens** and protect
   - [Authenticated ephemeral ECDH (recommended session model)](#authenticated-ephemeral-ecdh-recommended-session-model)
   - [Ephemeral ECDH and Shamir: gap in commercial tokens (creators’ knowledge)](#ephemeral-ecdh-and-shamir-gap-in-commercial-tokens-creators-knowledge)
   - [Optional / profile-gated features](#optional-profile-gated-features)
+- [Adding new curves and algorithms](#adding-new-curves-and-algorithms)
+  - [Integrating classical curves on the PKE engine](#integrating-classical-curves-on-the-pke-engine)
+  - [Post-quantum examples consistent with this README](#post-quantum-examples-consistent-with-this-readme)
+  - [liboqs and explicit algorithm selection](#liboqs-and-explicit-algorithm-selection)
+  - [Stateful hash signatures (XMSS, LMS) and hardware counters](#stateful-hash-signatures-xmss-lms-and-hardware-counters)
 - [Cryptographic algorithm background](#cryptographic-algorithm-background)
   - [Cryptographic ciphers influenced by the NSA](#cryptographic-ciphers-influenced-by-the-nsa)
   - [Cryptographic ciphers not influenced by the NSA](#cryptographic-ciphers-not-influenced-by-the-nsa)
@@ -211,7 +216,7 @@ To the **creators’ knowledge**, as of **25 March 2026**, **no hardware securit
 
 ### Optional / profile-gated features
 
-Algorithms that are **optional in GnuPG builds** or **experimental in OpenPGP** may be enabled per **firmware profile**. Document what is compiled in for each release.
+Algorithms that are **optional in GnuPG builds** or **experimental in OpenPGP** may be enabled per **firmware profile**. Document what is compiled in for each release. For **new curves and PQC**, see [Adding new curves and algorithms](#adding-new-curves-and-algorithms).
 
 ---
 
@@ -259,6 +264,48 @@ Several scandals and controversies have surrounded the NSA’s involvement in cr
 | **SHA-1 deprecation** | The SHA-1 hashing algorithm, once endorsed by the NSA, was later found vulnerable, leading to its deprecation and questions about the NSA’s early assessments of its security. |
 
 **Summary:** These incidents highlight significant concerns regarding the NSA’s influence in cryptography and the potential implications for security and privacy. The revelations have fostered a mistrust of cryptographic standards and increased the demand for independent auditing and verification of cryptographic algorithms.
+
+---
+
+## Adding new curves and algorithms
+
+This README’s **design bias** is to prefer **non-NSA-influenced** classical options where practical (**Brainpool** over default NIST ECC profiles, **ChaCha20** over **AES** when hardware or policy favors it), as discussed in [Cryptographic algorithm background](#cryptographic-algorithm-background). The same bias extends to **new** primitives: add curves and post-quantum (PQC) schemes deliberately, with test vectors, code review, and explicit **firmware profiles** so users know what is enabled.
+
+### Integrating classical curves on the PKE engine
+
+For **prime-field ECC** supported by the **algorithm-agnostic PKE** block:
+
+1. Obtain the curve’s **256-bit prime** (field characteristic) and curve parameters from a **normative** source (RFC, BSI, etc.).
+2. Program **N0Dat** and related configuration per silicon documentation; let the block compute the **Montgomery** reduction parameter at runtime where the RTL allows.
+3. Run **validation** against known test vectors (RFC 5639 for Brainpool, etc.) on real hardware before exposing the curve in a product profile.
+4. If the prime does not fit the engine’s fixed-width model or fails validation, implement the curve in **software** on the VexRiscv (slower, but keeps the option open).
+
+**Non-ECC** additions (e.g. extra hash modes in **ComboHash**, new AEAD composition) follow the same pattern: **hardware path** when the block supports it, **software** otherwise, with **HKDF** / **info** strings versioned in a central policy table.
+
+### Post-quantum examples consistent with this README
+
+The following are **illustrative** candidates that fit the **conservative / less NIST-entangled** end of the spectrum—not an exhaustive list, and not a promise to ship every item:
+
+| Direction | Role | Why it fits the stated philosophy |
+|-----------|------|-----------------------------------|
+| **XMSS** or **LMS** | Post-quantum **signatures** | **Hash-based**, IETF-standardized (e.g. HSS/LMS, XMSS in RFC documents), **no algebraic structure** comparable to number-theoretic PQC; already considered in **firmware-signing** and long-term archival contexts. |
+| **Classic McEliece** | PQC **KEM** (key encapsulation) | **Code-based**, long **independent** cryptanalysis history; often viewed as the most **conservative** lattice-free PQC KEM choice (large public keys). |
+| **FrodoKEM** | Alternative PQC **KEM** | **Unstructured lattices**; often seen as **more conservative** than **Kyber (ML-KEM)** with respect to **algebraic structure** and **NIST process entanglement** in its design narrative—at the cost of larger messages and runtime. |
+| **Hybrid key establishment** | Session / long-term protection | Combine a PQC KEM with **X25519** (Bernstein curve, **non-NIST**) rather than hybridizing with **NIST** ECC only, so the classical leg matches the rest of this README’s preferences. Derive the combined secret with **HKDF** and **clear domain separation** (`info` labels per protocol version). |
+
+OpenPGP and GnuPG **interop** may still require **ML-KEM / ML-DSA** (or other NIST-standard PQC) in some profiles; those can be **optional firmware profiles** distinct from the “philosophy default” set above.
+
+### liboqs and explicit algorithm selection
+
+The **Open Quantum Safe** [**liboqs**](https://openquantumsafe.org/liboqs/) library is a practical **source of implementations** for many PQC algorithms, including **XMSS**, **LMS**, **Classic McEliece**, **FrodoKEM**, and the NIST winners. **Important:** liboqs is a **catalog** of primitives—not every algorithm in it shares the same design lineage. For alignment with this README, an integrator would **select** modules such as **hash-based signatures**, **Classic McEliece**, and **FrodoKEM**, and treat **Kyber/Dilithium/SPHINCS+** (and classical **NIST ECC**) as **separate policy switches** when standards or partners require them.
+
+Porting liboqs (or any PQC) to **RV32** token firmware requires checking **code size**, **stack usage**, **constant-time** behavior on the target, and **side-channel** review; some schemes may remain **host-assisted** or **update-only** if they do not fit runtime budgets.
+
+### Stateful hash signatures (XMSS, LMS) and hardware counters
+
+**XMSS** and **LMS** are **stateful**: each signature uses a **one-time index**; **reusing** a state leaks key material. A token must **persist** and **monotonically advance** that state across power cycles **reliably**.
+
+That requirement **matches** the Baochip-1x **always-on domain** and **hardware one-way counters**: the firmware can tie **signature index** advancement to **counter increments** that **cannot be rolled back**, reducing the risk of accidental **state reuse** after reset or attack. Design work includes **atomicity** (counter and key state updated together), **backup** strategy if multiple counters exist, and **failure** behavior (refuse to sign rather than reuse an index).
 
 ---
 
@@ -337,6 +384,7 @@ When implementation begins, this repository is **intended to hold** **firmware**
 ## References
 
 - **GnuPG / OpenPGP:** [GnuPG](https://gnupg.org/) and the OpenPGP specifications as implemented by `gpg` for interoperability targets.
+- **liboqs (Open Quantum Safe):** [liboqs](https://openquantumsafe.org/liboqs/) — implementation library for post-quantum algorithms; **algorithm selection** remains a product policy choice (see [Adding new curves and algorithms](#adding-new-curves-and-algorithms)).
 - Baochip-1x / Dabao hardware documentation and RTL (CERN-OHL-W-2.0) as published by the silicon and board maintainers.
 - Xous operating system: [xous-core](https://github.com/betrusted-io/xous-core).
 
