@@ -1,6 +1,45 @@
 # Baochip-1x Firmware
 
-Firmware for **USB hardware security tokens** and protected cryptographic storage on the **Baochip-1x** SoC (Dabao evaluation board): OpenPGP smartcard-class behavior and vault semantics in the same product category as **Nitrokey-class** devices, with the platform and boot security model documented here. This README covers **platform selection**, **hardware capabilities**, **boot and zeroisation**, **requirement mapping**, and **standalone cryptographic capabilities** (GnuPG/OpenPGP-class algorithms and curves, the **extended on-device profile** below, and **Shamir secret sharing**).
+**Status:** This repository and README describe a **firmware idea and design target** only. **No implementation** of this firmware exists here yet: there is no built image, verified release, or completed codebase backing the design as written. Treat everything below as **proposed** architecture and requirements, not a product specification for shipping software.
+
+---
+
+This document outlines firmware for **USB hardware security tokens** and protected cryptographic storage on the **Baochip-1x** SoC (Dabao evaluation board): OpenPGP smartcard-class behavior and vault semantics in the same product category as **Nitrokey-class** devices, with the platform and boot security model documented here. This README covers **platform selection**, **hardware capabilities**, **boot and zeroisation**, **requirement mapping**, and **standalone cryptographic capabilities** (GnuPG/OpenPGP-class algorithms and curves, the **extended on-device profile** below, and **Shamir secret sharing**).
+
+## Table of contents
+
+- [Baochip-1x Firmware](#baochip-1x-firmware)
+- [Platform selection: Baochip-1x](#platform-selection-baochip-1x)
+- [Hardware specification (Dabao evaluation board)](#hardware-specification-dabao-evaluation-board)
+  - [Optional external memory](#optional-external-memory)
+- [Boot chain security model](#boot-chain-security-model)
+- [Requirement mapping](#requirement-mapping)
+- [Implementation notes](#implementation-notes)
+  - [Extending active zeroisation to PIN exhaustion](#extending-active-zeroisation-to-pin-exhaustion)
+  - [Key storage capacity (illustrative)](#key-storage-capacity-illustrative)
+  - [Developer mode and SKU policy](#developer-mode-and-sku-policy)
+- [Host-visible behavior](#host-visible-behavior)
+  - [Uninformed host or adversary](#uninformed-host-or-adversary)
+  - [Informed host (custom protocol or driver)](#informed-host-custom-protocol-or-driver)
+- [Cryptographic capabilities (standalone firmware)](#cryptographic-capabilities-standalone-firmware)
+  - [Symmetric and AEAD (GnuPG and extended profile)](#symmetric-and-aead-gnupg-and-extended-profile)
+  - [Public-key: curves and algorithms (GnuPG and extended profile)](#public-key-curves-and-algorithms-gnupg-and-extended-profile)
+  - [Digests, MAC, and key derivation](#digests-mac-and-key-derivation)
+  - [Shamir secret sharing (firmware)](#shamir-secret-sharing-firmware)
+  - [Authenticated ephemeral ECDH (recommended session model)](#authenticated-ephemeral-ecdh-recommended-session-model)
+  - [Ephemeral ECDH and Shamir: gap in commercial tokens (creators’ knowledge)](#ephemeral-ecdh-and-shamir-gap-in-commercial-tokens-creators-knowledge)
+  - [Optional / profile-gated features](#optional-profile-gated-features)
+- [Cryptographic algorithm background](#cryptographic-algorithm-background)
+  - [Cryptographic ciphers influenced by the NSA](#cryptographic-ciphers-influenced-by-the-nsa)
+  - [Cryptographic ciphers not influenced by the NSA](#cryptographic-ciphers-not-influenced-by-the-nsa)
+  - [Known scandals involving the NSA and cryptography](#known-scandals-involving-the-nsa-and-cryptography)
+- [Implementation path, tools, and firmware integrity](#implementation-path-tools-and-firmware-integrity)
+  - [Suggested implementation path](#suggested-implementation-path)
+  - [Toolchain and development tools](#toolchain-and-development-tools)
+  - [Verified flashing and updates](#verified-flashing-and-updates)
+- [Repository role](#repository-role)
+- [References](#references)
+- [Disclaimer](#disclaimer)
 
 ---
 
@@ -61,7 +100,7 @@ This satisfies an **active zeroisation** requirement at a layer **below** replac
 | Monotonic PIN counter, tamper-evident | Confirmed | Hardware one-way counters in always-on domain |
 | Physical attack hardening | Confirmed | Glitch sensors, mesh, PV sensor, ECC RAM |
 | Algorithm-agnostic vault / HKDF domain separation | Implementable | Application design and test vectors |
-| USB form factor (production) | Pending | Dabao is an evaluation board; **custom carrier** needed for product shape |
+| USB form factor (production) | Pending | A board in **Raspberry Pi Pico** form factor exists; **USB-A** dongle-style devices are **not** available at this time |
 
 ---
 
@@ -108,13 +147,13 @@ Integrators remain responsible for key management, export and import controls, a
 
 ## Cryptographic capabilities (standalone firmware)
 
-The firmware is **standalone**: it does not depend on any particular host-side application or driver stack. Cryptographic coverage is defined by **GnuPG / OpenPGP** interoperability targets, the **extended on-device profile** in the tables below, and **Shamir secret sharing**.
+The **target** firmware is **planned to be standalone**: it would not depend on any particular host-side application or driver stack. Cryptographic coverage **would** be defined by **GnuPG / OpenPGP** interoperability targets, the **extended on-device profile** in the tables below, and **Shamir secret sharing**.
 
 1. **GnuPG / OpenPGP** — algorithms and curves that appear in contemporary **GnuPG** (`gpg`) and **OpenPGP** usage (key types, ciphers, digests, and key-wrapping conventions the token is designed to support).
 2. **Extended on-device profile** — Brainpool ECC (P256r1, P384r1, P512r1), AEAD suites (AES-GCM, ChaCha20-Poly1305), HKDF, HMAC, PBKDF2, ECIES-style and multi-recipient constructions, authenticated encryption profiles, and digests available from **ComboHash** (SHA-2, SHA-3, RIPEMD, Blake2, Blake3), as reflected in the following subsections.
 3. **Shamir secret sharing** — **K-of-N** threshold split and recovery **in firmware** (generation of shares, secure handling of shares at rest, and reconstruction when at least **K** valid shares are supplied).
 
-Implementation uses the **Baochip-1x accelerators** where applicable and **software** (VexRiscv, Xous) elsewhere. The following summarizes scope; exact API surfaces and test vectors belong in this repository’s code and release documentation.
+A future implementation would use the **Baochip-1x accelerators** where applicable and **software** (VexRiscv, Xous) elsewhere. The following summarizes **intended** scope; API surfaces and test vectors would live in this repository once code exists.
 
 ### Symmetric and AEAD (GnuPG and extended profile)
 
@@ -130,7 +169,7 @@ Implementation uses the **Baochip-1x accelerators** where applicable and **softw
 |------|--------|
 | **RSA** | Encryption, signing, verification sizes supported by **PKE** and policy |
 | **NIST elliptic curves** | ECDH / ECDSA as used in OpenPGP (e.g. P-256, P-384, P-521) subject to PKE configuration and validation |
-| **Brainpool** | **brainpoolP256r1**, **brainpoolP384r1**, **brainpoolP512r1** — ECDH, ECDSA, ECIES-style encrypt/decrypt and related flows (**P256r1** confirmed on PKE with runtime prime); multi-recipient patterns as implemented in firmware |
+| **Brainpool** | **brainpoolP256r1**, **brainpoolP384r1**, **brainpoolP512r1** — ECDH, ECDSA, ECIES-style encrypt/decrypt and related flows (**P256r1** confirmed on PKE with runtime prime); multi-recipient patterns as **planned** for firmware |
 | **Curve25519 / Ed25519** | **X25519** / **Ed25519** (and OpenPGP Cv25519 / Ed25519 usage) via **PKE** and software glue as required |
 | **ECDH / ECDSA** | Ephemeral and static key agreement and signatures per supported curves |
 
@@ -164,11 +203,11 @@ Use **long-term** OpenPGP / GnuPG keys **only to authenticate** an additional **
 
 **Security property:** compromise of a **long-term** signing key lets an attacker **impersonate** the owner in **future** sessions (forge authenticated ephemeral offers) but does **not** by itself allow **decryption of past** sessions, because those used secrets that depended on ephemeral private values that should no longer exist.
 
-This firmware’s **Ephemeral ECDH on-device** row in [Requirement mapping](#requirement-mapping) is aimed at implementing that pattern with MMU-isolated Xous components and secure erasure of ephemeral material.
+The **Ephemeral ECDH on-device** row in [Requirement mapping](#requirement-mapping) is **intended** to cover implementing that pattern with MMU-isolated Xous components and secure erasure of ephemeral material once firmware is built.
 
 ### Ephemeral ECDH and Shamir: gap in commercial tokens (creators’ knowledge)
 
-To the **creators’ knowledge**, as of **25 March 2026**, **no hardware security device** they are aware of supports **ephemeral key pairs** (in the authenticated ephemeral ECDH sense above) **or** **Shamir’s secret** sharing as first-class on-token features at the time of writing. This project is intended to close that gap on **Baochip-1x** through open firmware. Other products may add such capabilities later; integrators should verify current vendor documentation.
+To the **creators’ knowledge**, as of **25 March 2026**, **no hardware security device** they are aware of supports **ephemeral key pairs** (in the authenticated ephemeral ECDH sense above) **or** **Shamir’s secret** sharing as first-class on-token features at the time of writing. This project **aims** to close that gap on **Baochip-1x** through open firmware once implemented. Other products may add such capabilities later; integrators should verify current vendor documentation.
 
 ### Optional / profile-gated features
 
@@ -178,7 +217,7 @@ Algorithms that are **optional in GnuPG builds** or **experimental in OpenPGP** 
 
 ## Cryptographic algorithm background
 
-The following is **general background** on how some algorithms relate to standards bodies and historical influence. It is not specific legal or security advice; it may help when choosing among options this firmware can offer (for example preferring **Brainpool**, **ChaCha20**, or **RSA** where policy calls for diversity from NSA-influenced defaults).
+The following is **general background** on how some algorithms relate to standards bodies and historical influence. It is not specific legal or security advice; it may help when choosing among options the **planned** firmware could offer (for example preferring **Brainpool**, **ChaCha20**, or **RSA** where policy calls for diversity from NSA-influenced defaults).
 
 ### Cryptographic ciphers influenced by the NSA
 
@@ -223,9 +262,75 @@ Several scandals and controversies have surrounded the NSA’s involvement in cr
 
 ---
 
+## Implementation path, tools, and firmware integrity
+
+This section is a **proposed** roadmap and checklist for when implementation starts. Exact commands and repository layout will depend on published Baochip-1x / Dabao SDKs and Xous board support.
+
+### Suggested implementation path
+
+A practical order of work:
+
+1. **Hardware bring-up** — Confirm power, clock, USB HS, RRAM/SRAM visibility, and access to **PKE**, **ComboHash**, **AES**, and **TRNG** from a minimal bare-metal or stub loader. Validate **boot0 → boot1** signature verification on real silicon (engineering samples with JTAG, where available).
+2. **Reproducible boot1** — Integrate or port the **open, reproducible** second-stage loader described for the platform; freeze a **build recipe** (compiler versions, flags) early so others can rebuild identical images.
+3. **Xous (or agreed OS) integration** — Kernel and userspace for **RV32** with MMU; device drivers for USB device stack, on-chip NV storage, always-on counters, and crypto accelerators. Align with **process isolation** for vault vs. networking/USB paths.
+4. **Core token services** — PIN/policy, key vault layout on **RRAM**, long-term key operations (OpenPGP-aligned), secure **zeroisation** hooks tied to policy and boot0 behavior.
+5. **Extended features** — **Authenticated ephemeral ECDH** session API, **Shamir** share generation and recovery flows, dual USB personality (mass storage vs. authenticated unlock) as specified in [Host-visible behavior](#host-visible-behavior).
+6. **Host tooling** — Flashing and update utilities for Linux (and optionally other OSes), conformance tests, and documentation for integrators.
+7. **Hardening and audit** — Fuzzing of parsers, side-channel review of software paths, and third-party review of the verification and update logic.
+
+Each phase should end with **verifiable artifacts** (signed test images, reproducible hashes) before the next phase relies on them.
+
+### Toolchain and development tools
+
+Expect to combine **RISC-V** embedded tooling with **Rust** (Xous ecosystem) and standard release engineering tools:
+
+| Category | Examples (illustrative) |
+|----------|-------------------------|
+| **Rust / Xous** | `rustup`, `cargo`, RISC-V target (e.g. `riscv32imac-unknown-none-elf` or the exact triple published for Baochip-1x), Xous build scripts and `xtask`-style automation once ported |
+| **C / assembly** | `gcc` or `clang` for RISC-V for any bootloader or RTL test harness not in Rust |
+| **Build** | `cmake`, `make`, `ninja` as required by upstream bootloaders; **pinned** compiler versions for reproducibility |
+| **Debugging (pre-production only)** | **OpenOCD**, **probe-rs**, or vendor tools where **JTAG** is still available; not applicable after **JTAG fuse** on production parts |
+| **Python** | Host-side flash/update scripts, test runners, checksum and manifest generation |
+| **Signing / verification** | **GnuPG**, **minisign**, or **Sigstore/cosign** for **release signing**; **Ed25519** tooling aligned with boot verification keys |
+| **Version control** | `git`; **signed tags** for releases |
+| **Documentation** | Specs from silicon/board maintainers (memory map, register descriptions, update protocol) |
+
+The board vendor’s published **SDK, flashing utility, and TRM** supersede any guess in this table once released.
+
+### Verified flashing and updates
+
+**Yes, it is possible** to give users **strong assurance** that flashed or updated firmware matches **intended, untampered** bits—but only within a **clear trust model**. The **immutable boot0** stage is the root of trust on-chip: it checks **boot1** (and, in a full design, the chain can continue to kernel and application images). Software **cannot** upgrade a broken or malicious boot0; that is a **manufacturing / silicon** trust question.
+
+**On-device verification (primary defense)**
+
+- **Signed images only** — Boot1 and subsequent layers should be accepted only if **Ed25519** (or policy-defined) signatures verify against **keys burned or provisioned** under the product policy (see [Boot chain security model](#boot-chain-security-model)).
+- **No “raw” production flash** — Production workflow should refuse to install an image that fails cryptographic verification; development keys must be **distinct** from retail keys.
+- **Measured boot / sealed storage (optional)** — Derive vault keys or attestation from a hash of the boot chain so a tampered image cannot unlock the same secrets without detection (design detail for a later spec).
+
+**Off-device verification (what the user or integrator can do)**
+
+- **Reproducible builds** — Document the exact toolchain and steps so independent parties can **rebuild** release binaries and match **SHA-256** / **SHA-512** digests to those published by the project.
+- **Signed release artifacts** — Ship update packages with **detached GPG / minisign / Sigstore** signatures; publish **checksum files** signed together with the binaries.
+- **User workflow before flash** — Verify the signature on the update bundle, compute hashes, compare to the signed manifest, then run the vendor flash tool. The **PC running the tool** must itself be trusted; malware on the host can still subvert a single session (defense in depth: offline verification, air-gapped signing workstation for releases).
+
+**Update-time hardening**
+
+- **Dual-bank (A/B) updates** — Write the new image to the inactive bank, **verify** signature and optionally **full-image hash** on device, then switch boot pointer only after success; keeps a **known-good** fallback.
+- **Read-back check** — After programming NV regions, optionally **hash flash contents** and compare to the expected value before committing the update (mitigates some glitch or partial-write failures; policy-dependent).
+
+**Limits of software-only assurance**
+
+- **Boot0** and **ROM masks** are trusted by definition; **IRIS** / open-RTL review and **wafer-probe** process controls address that layer, not application code.
+- **Physical attackers** with lab equipment may attempt **fault injection**; the chip’s **glitch sensors**, **mesh**, and **boot0 zeroisation** path reduce but do not abolish that threat model.
+- If the **signing keys** for updates are compromised, valid signatures can be produced for malicious firmware—**key custody**, **HSMs**, and **multi-party** signing reduce that risk.
+
+Together, **signature verification in boot ROM / boot1**, **signed releases with reproducible builds**, and **A/B verified updates** form a practical integrity story for flashing and field updates once this firmware exists.
+
+---
+
 ## Repository role
 
-This repository holds **firmware** (boot stages beyond public RTL if applicable, Xous services, USB personalities, vault layout, and test harnesses). It does **not** replace open RTL, bootloader sources, or the Xous tree; those remain upstream with reproducible build instructions published alongside releases.
+When implementation begins, this repository is **intended to hold** **firmware** (boot stages beyond public RTL if applicable, Xous services, USB personalities, vault layout, and test harnesses). It will **not** replace open RTL, bootloader sources, or the Xous tree; those remain upstream with reproducible build instructions published alongside releases.
 
 ---
 
@@ -239,4 +344,4 @@ This repository holds **firmware** (boot stages beyond public RTL if applicable,
 
 ## Disclaimer
 
-**Legal and compliance** (cryptographic export and import controls, data-protection and key-storage rules in your jurisdiction, corporate policy, etc.) is the responsibility of **integrators, vendors, and end users**. This README describes **technical capability** only; it is not legal advice and does not authorize any specific deployment.
+**Legal and compliance** (cryptographic export and import controls, data-protection and key-storage rules in your jurisdiction, corporate policy, etc.) is the responsibility of **integrators, vendors, and end users**. This README describes **intended technical capability** as a **design concept** only; it is not legal advice and does not authorize any specific deployment.
