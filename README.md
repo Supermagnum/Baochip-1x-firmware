@@ -174,7 +174,7 @@ A future implementation would use the **Baochip-1x accelerators** where applicab
 
 ### OpenSSL, libsodium (NaCl), and similar libraries
 
-**Yes** — **OpenSSL** (or **LibreSSL**), **libsodium** (the usual deployable form of **NaCl**-style crypto), and comparable audited libraries are **usable as sources of implementations** for many of the ciphers, modes, hashes, and KDFs listed in this README, subject to **porting**, **code size**, and **policy** (which path is authoritative when both HW and software can perform the same operation).
+**OpenSSL** (or **LibreSSL**), **libsodium** (the usual deployable form of **NaCl**-style crypto), and comparable audited libraries are **usable as sources of implementations** for many of the ciphers, modes, hashes, and KDFs listed in this README, subject to **porting**, **code size**, and **policy** (which path is authoritative when both HW and software can perform the same operation).
 
 | Library | Typical coverage relevant here | Role on Baochip-1x (illustrative) |
 |---------|-------------------------------|-----------------------------------|
