@@ -387,7 +387,7 @@ The board vendor’s published **SDK, flashing utility, and TRM** supersede any 
 
 ### Verified flashing and updates
 
-**Yes, it is possible** to give users **strong assurance** that flashed or updated firmware matches **intended, untampered** bits—but only within a **clear trust model**. The **immutable boot0** stage is the root of trust on-chip: it checks **boot1** (and, in a full design, the chain can continue to kernel and application images). Software **cannot** upgrade a broken or malicious boot0; that is a **manufacturing / silicon** trust question.
+**It is possible** to give users **strong assurance** that flashed or updated firmware matches **intended, untampered** bits—but only within a **clear trust model**. The **immutable boot0** stage is the root of trust on-chip: it checks **boot1** (and, in a full design, the chain can continue to kernel and application images). Software **cannot** upgrade a broken or malicious boot0; that is a **manufacturing / silicon** trust question.
 
 **On-device verification (primary defense)**
 
