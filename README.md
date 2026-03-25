@@ -197,6 +197,20 @@ A future implementation would use the **Baochip-1x accelerators** where applicab
 - Uses finite-field arithmetic consistent with chosen security parameters (e.g. prime or curve constraints for embedded secrets, as specified in implementation docs).
 - Intended for **vault policies**, **backup/recovery**, and **quorum-controlled** key material — independent of host OS or application stack.
 
+**Combining Shamir with different ciphers and curves:** The planned firmware should treat Shamir as **orthogonal** to the choice of **symmetric cipher**, **curve**, or **post-quantum** primitive. The **reconstructed secret** (or a key derived from it with **HKDF** and distinct **`info` labels**) can feed **any** approved combination—for example **Brainpool** ECDH or signatures together with **ChaCha20-Poly1305** payloads, **AES-GCM** for another channel, or a **hybrid** classical-plus-PQC KEM—without forcing a single algorithm family end-to-end.
+
+**Possible advantages of that composition:**
+
+| Advantage | Explanation |
+|-----------|-------------|
+| **Quorum-governed root** | A **K-of-N** group controls a **single high-value secret** (or seed); only after reconstruction does the token derive operational keys. No one share holder alone can unseal the full capability. |
+| **Crypto agility** | The same shared secret can be expanded into **multiple keys** for different algorithms or protocols; you can **add or rotate** ciphers and curves by updating **derivation policy** while keeping the Shamir ceremony and share format stable. |
+| **Layered threat model** | Shamir addresses **governance and recovery** (who can reconstruct); **ciphers and curves** address **channel and algorithmic** risk (e.g. prefer **Brainpool** / **ChaCha20** per policy, or add **PQC** per [Adding new curves and algorithms](#adding-new-curves-and-algorithms)). The layers compose rather than collide. |
+| **Separation of duties** | Shares can be held by **different roles** or sites; reconstructed material stays inside the **secure boundary** while outbound traffic uses whichever **interoperable** algorithm each peer requires. |
+| **Future-proofing** | If a cipher or curve is later deprecated, **new** keys can be derived from the same post-Shamir root (with new `info` strings) without necessarily **re-running** a full K-of-N ceremony—subject to policy and forward-secrecy requirements. |
+
+Exact **APIs** and **policies** (what may be derived from a Shamir-recovered secret, and when) belong in the eventual implementation spec and **firmware profiles**.
+
 ### Authenticated ephemeral ECDH (recommended session model)
 
 Use **long-term** OpenPGP / GnuPG keys **only to authenticate** an additional **ephemeral ECDH** exchange, not as the direct input to bulk session keys.
