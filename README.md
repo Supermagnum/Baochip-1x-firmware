@@ -2,9 +2,11 @@
 
 **Status:** This repository and README describe a **firmware idea and design target** only. **No implementation** of this firmware exists here yet: there is no built image, verified release, or completed codebase backing the design as written. Treat everything below as **proposed** architecture and requirements, not a product specification for shipping software.
 
+**README maintenance:** Content is maintained in this file as the single design overview; **authoritative change history** is the **git log** for this repository. Review dates in the text (e.g. commercial-token survey) are **point-in-time** statements unless refreshed in a later commit.
+
 ---
 
-This document outlines firmware for **USB hardware security tokens** and protected cryptographic storage on the **Baochip-1x** SoC (Dabao evaluation board): OpenPGP smartcard-class behavior and vault semantics in the same product category as **Nitrokey-class** devices, with the platform and boot security model documented here. This README covers **platform selection**, **hardware capabilities**, **boot and zeroisation**, **requirement mapping**, and **standalone cryptographic capabilities** (GnuPG/OpenPGP-class algorithms and curves, the **extended on-device profile** below, and **Shamir secret sharing**).
+This document outlines firmware for **USB hardware security tokens** and protected cryptographic storage on the **Baochip-1x** SoC (Dabao evaluation board): OpenPGP smartcard-class behavior and vault semantics in the same product category as **Nitrokey-class** devices, with the platform and boot security model documented here. It covers **platform selection**, **hardware**, **boot and zeroisation**, **requirement mapping**, **cryptographic capabilities** (GnuPG/OpenPGP and an **extended on-device profile**, **Shamir** and composition with mixed ciphers/curves), **OpenSSL / libsodium** as optional software sources alongside silicon, **adding curves and PQC** (including **liboqs**), **algorithm background** (NSA influence context), **implementation path and verified updates**, and **references**.
 
 ## Table of contents
 
@@ -22,6 +24,7 @@ This document outlines firmware for **USB hardware security tokens** and protect
   - [Uninformed host or adversary](#uninformed-host-or-adversary)
   - [Informed host (custom protocol or driver)](#informed-host-custom-protocol-or-driver)
 - [Cryptographic capabilities (standalone firmware)](#cryptographic-capabilities-standalone-firmware)
+  - [OpenSSL, libsodium (NaCl), and similar libraries](#openssl-libsodium-nacl-and-similar-libraries)
   - [Symmetric and AEAD (GnuPG and extended profile)](#symmetric-and-aead-gnupg-and-extended-profile)
   - [Public-key: curves and algorithms (GnuPG and extended profile)](#public-key-curves-and-algorithms-gnupg-and-extended-profile)
   - [Digests, MAC, and key derivation](#digests-mac-and-key-derivation)
@@ -160,6 +163,20 @@ The **target** firmware is **planned to be standalone**: it would not depend on 
 
 A future implementation would use the **Baochip-1x accelerators** where applicable and **software** (VexRiscv, Xous) elsewhere. The following summarizes **intended** scope; API surfaces and test vectors would live in this repository once code exists.
 
+### OpenSSL, libsodium (NaCl), and similar libraries
+
+**Yes** — **OpenSSL** (or **LibreSSL**), **libsodium** (the usual deployable form of **NaCl**-style crypto), and comparable audited libraries are **usable as sources of implementations** for many of the ciphers, modes, hashes, and KDFs listed in this README, subject to **porting**, **code size**, and **policy** (which path is authoritative when both HW and software can perform the same operation).
+
+| Library | Typical coverage relevant here | Role on Baochip-1x (illustrative) |
+|---------|-------------------------------|-----------------------------------|
+| **OpenSSL** / **LibreSSL** | **AES**, **SHA-2** / **SHA-3**, **HMAC**, **HKDF**, **PBKDF2**, **RSA**, **EC** (including **Brainpool** where enabled in the build), **ChaCha20-Poly1305** (in current OpenSSL branches), **X25519** / **Ed25519** via EVP, and wide **OpenPGP-adjacent** interoperability | **Software fallback** where **PKE** / **ComboHash** / **AES** do not apply; **reference** or **cross-check** implementations; algorithms **not** exposed in silicon (e.g. some legacy OpenPGP ciphers). Full OpenSSL on **RV32** may be **large**; **trimmed** builds or **per-algorithm** use (e.g. only EVP paths you enable) are common on tokens. |
+| **libsodium** (“**NaCl**” API) | **ChaCha20-Poly1305**, **X25519**, **Ed25519**, **Argon2**, **generichash** / **crypto_box**-style constructions | Strong fit for the README’s **Bernstein**-curve and **ChaCha** preferences; often **smaller** than linking all of OpenSSL when you only need those **modern** primitives. Does **not** replace the full **OpenPGP** surface by itself—pair with OpenSSL or **custom** code for **RSA**, **Brainpool**, **Camellia**, etc., as needed. |
+| **liboqs** | **Post-quantum** KEMs and signatures (see [Adding new curves and algorithms](#adding-new-curves-and-algorithms)) | **PQC** paths; separate from classical **TLS-style** stacks unless composed with **HKDF** hybrids. |
+
+**Practice:** Prefer **hardware** (**PKE**, **ComboHash**, **AES**, **TRNG**) when **validated** on silicon and **policy** allows—**lower CPU** and clearer **acceleration** story. Use **OpenSSL** / **libsodium** for **gaps**, for **algorithms** the blocks do not implement, and for **tests** (known-answer vectors, interop with `gpg`). If both HW and software can compute the same secret operation, define **one** authoritative path per **firmware profile** and use the other only for **verification** or **development**, to avoid **divergent** behavior.
+
+Licensing (e.g. OpenSSL **Apache 2.0**, libsodium **ISC**) and **export** classification still apply to the **combined** firmware image.
+
 ### Symmetric and AEAD (GnuPG and extended profile)
 
 | Area | Notes |
@@ -230,7 +247,7 @@ To the **creators’ knowledge**, as of **25 March 2026**, **no hardware securit
 
 ### Optional / profile-gated features
 
-Algorithms that are **optional in GnuPG builds** or **experimental in OpenPGP** may be enabled per **firmware profile**. Document what is compiled in for each release. For **new curves and PQC**, see [Adding new curves and algorithms](#adding-new-curves-and-algorithms).
+Algorithms that are **optional in GnuPG builds** or **experimental in OpenPGP** may be enabled per **firmware profile**. Document what is compiled in for each release. For **new curves and PQC**, see [Adding new curves and algorithms](#adding-new-curves-and-algorithms). For **software library** sources alongside hardware, see [OpenSSL, libsodium (NaCl), and similar libraries](#openssl-libsodium-nacl-and-similar-libraries).
 
 ---
 
@@ -352,6 +369,7 @@ Expect to combine **RISC-V** embedded tooling with **Rust** (Xous ecosystem) and
 | **Build** | `cmake`, `make`, `ninja` as required by upstream bootloaders; **pinned** compiler versions for reproducibility |
 | **Debugging (pre-production only)** | **OpenOCD**, **probe-rs**, or vendor tools where **JTAG** is still available; not applicable after **JTAG fuse** on production parts |
 | **Python** | Host-side flash/update scripts, test runners, checksum and manifest generation |
+| **Software crypto (on-device, optional)** | Trimmed **OpenSSL** / **LibreSSL** or **libsodium** builds for gaps not covered by **PKE** / **ComboHash** (see [OpenSSL, libsodium (NaCl), and similar libraries](#openssl-libsodium-nacl-and-similar-libraries)); **liboqs** for selected PQC modules |
 | **Signing / verification** | **GnuPG**, **minisign**, or **Sigstore/cosign** for **release signing**; **Ed25519** tooling aligned with boot verification keys |
 | **Version control** | `git`; **signed tags** for releases |
 | **Documentation** | Specs from silicon/board maintainers (memory map, register descriptions, update protocol) |
@@ -398,6 +416,8 @@ When implementation begins, this repository is **intended to hold** **firmware**
 ## References
 
 - **GnuPG / OpenPGP:** [GnuPG](https://gnupg.org/) and the OpenPGP specifications as implemented by `gpg` for interoperability targets.
+- **OpenSSL:** [OpenSSL](https://www.openssl.org/) — optional **software** source for many classical primitives when not using or cross-checking silicon paths (see [OpenSSL, libsodium (NaCl), and similar libraries](#openssl-libsodium-nacl-and-similar-libraries)).
+- **libsodium (NaCl-style):** [libsodium](https://libsodium.gitbook.io/) — optional **software** source for ChaCha20-Poly1305, X25519, Ed25519, and related APIs.
 - **liboqs (Open Quantum Safe):** [liboqs](https://openquantumsafe.org/liboqs/) — implementation library for post-quantum algorithms; **algorithm selection** remains a product policy choice (see [Adding new curves and algorithms](#adding-new-curves-and-algorithms)).
 - Baochip-1x / Dabao hardware documentation and RTL (CERN-OHL-W-2.0) as published by the silicon and board maintainers.
 - Xous operating system: [xous-core](https://github.com/betrusted-io/xous-core).
