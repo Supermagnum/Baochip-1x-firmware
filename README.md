@@ -6,7 +6,7 @@
 
 ---
 
-This document outlines firmware for **USB hardware security tokens** and protected cryptographic storage on the **Baochip-1x** SoC (Dabao evaluation board): OpenPGP smartcard-class behavior and vault semantics in the same product category as **Nitrokey-class** devices, with the platform and boot security model documented here. It covers **platform selection**, **hardware**, **boot and zeroisation**, **requirement mapping**, **cryptographic capabilities** (GnuPG/OpenPGP and an **extended on-device profile**, **Shamir** and composition with mixed ciphers/curves), **OpenSSL / libsodium** as optional software sources alongside silicon, **adding curves and PQC** (including **liboqs**), **algorithm background** (NSA influence context), **implementation path and verified updates**, and **references**.
+This document outlines firmware for **USB hardware security tokens** and protected cryptographic storage on the **Baochip-1x** SoC (Dabao evaluation board): OpenPGP smartcard-class behavior and vault semantics in the same product category as **Nitrokey-class** devices, with the platform and boot security model documented here. It covers **platform selection**, **hardware**, **boot and zeroisation**, **requirement mapping**, **cryptographic capabilities** (GnuPG/OpenPGP and an **extended on-device profile**, **Shamir** and composition with mixed ciphers/curves), **OpenSSL / libsodium** as optional software sources alongside silicon, **adding curves and PQC** (including **liboqs**), **algorithm background** (NSA influence context), **implementation path and verified updates**, **cryptographic testing and test vectors** (CAVP, Wycheproof, RFC, BSI), and **references**.
 
 ## Table of contents
 
@@ -45,6 +45,15 @@ This document outlines firmware for **USB hardware security tokens** and protect
   - [Suggested implementation path](#suggested-implementation-path)
   - [Toolchain and development tools](#toolchain-and-development-tools)
   - [Verified flashing and updates](#verified-flashing-and-updates)
+- [Cryptographic testing and test vectors](#cryptographic-testing-and-test-vectors)
+  - [NIST CAVP](#nist-cavp)
+  - [Wycheproof](#wycheproof)
+  - [RFC test vectors](#rfc-test-vectors)
+  - [BSI specifications](#bsi-specifications)
+  - [Blake2 and Blake3](#blake2-and-blake3)
+  - [Post-quantum KEMs (BIKE and NTRU, if compiled in)](#post-quantum-kems-bike-and-ntru-if-compiled-in)
+  - [Suggested test layering](#suggested-test-layering)
+  - [References for this section](#references-for-this-section)
 - [Repository role](#repository-role)
 - [References](#references)
 - [Disclaimer](#disclaimer)
@@ -354,7 +363,7 @@ A practical order of work:
 4. **Core token services** — PIN/policy, key vault layout on **RRAM**, long-term key operations (OpenPGP-aligned), secure **zeroisation** hooks tied to policy and boot0 behavior.
 5. **Extended features** — **Authenticated ephemeral ECDH** session API, **Shamir** share generation and recovery flows, dual USB personality (mass storage vs. authenticated unlock) as specified in [Host-visible behavior](#host-visible-behavior).
 6. **Host tooling** — Flashing and update utilities for Linux (and optionally other OSes), conformance tests, and documentation for integrators.
-7. **Hardening and audit** — Fuzzing of parsers, side-channel review of software paths, and third-party review of the verification and update logic.
+7. **Hardening and audit** — Fuzzing of parsers, side-channel review of software paths, and third-party review of the verification and update logic. Align KAT and TRNG testing with [Cryptographic testing and test vectors](#cryptographic-testing-and-test-vectors).
 
 Each phase should end with **verifiable artifacts** (signed test images, reproducible hashes) before the next phase relies on them.
 
@@ -407,6 +416,133 @@ Together, **signature verification in boot ROM / boot1**, **signed releases with
 
 ---
 
+## Cryptographic testing and test vectors
+
+This section maps **test vector sources** to each algorithm in the firmware’s **planned cryptographic profile**. Using a **known-answer test (KAT)** vector does **not** imply endorsement of the body that produced it—the vectors are **numbers**, and their correctness can be verified **independently**.
+
+### NIST CAVP
+
+**NIST CAVP** vectors are used where they cover algorithms in this profile. Using them for **AES**, **SHA-2**, **SHA-3**, **HMAC**, **PBKDF2**, and **RSA** is straightforward. CAVP does **not** cover **Brainpool** curves, **ChaCha20-Poly1305**, **Blake2**, **Blake3**, **RIPEMD-160**, **Ed25519**, or **X25519**, so **other sources** fill those gaps.
+
+| Algorithm | CAVP coverage |
+|-----------|---------------|
+| AES-CBC / CTR / GCM / ECB | Yes |
+| SHA-224 / 256 / 384 / 512 | Yes |
+| SHA-3 (224 / 256 / 384 / 512) | Yes |
+| HMAC-SHA256 / SHA512 | Yes |
+| PBKDF2 | Yes |
+| RSA sign / verify / encrypt | Yes |
+| ECDSA (NIST curves) | Yes |
+| Ed25519 | Partial only |
+| X25519 / ECDH | Partial only |
+| Brainpool curves | No |
+| ChaCha20-Poly1305 | No |
+| Blake2 / Blake3 | No |
+| RIPEMD-160 | No |
+| BIKE / NTRU (if compiled in) | No |
+
+### Wycheproof
+
+**Project Wycheproof** (maintained at [https://github.com/C2SP/wycheproof](https://github.com/C2SP/wycheproof)) provides **implementation-attack** test vectors covering edge cases, weak keys, invalid curve points, and signature malleability. It is the **primary** test source for algorithms CAVP does not reach.
+
+Dedicated JSON vector files exist for:
+
+- `ecdh_brainpoolP256r1_test.json`
+- `ecdh_brainpoolP384r1_test.json`
+- `ecdh_brainpoolP512r1_test.json`
+- `ecdsa_brainpoolP256r1_sha256_test.json`
+- `chacha20_poly1305_test.json`
+- AES-GCM, AES-CBC, ECIES, HKDF, HMAC, RSA (PKCS1, OAEP, PSS), EdDSA, X25519
+
+Wycheproof does **not** cover **Blake2**, **Blake3**, **RIPEMD-160**, **BIKE**, or **NTRU**.
+
+The vectors are consumed as a **git submodule** or via the `testvectors_v1/` directory. Add Wycheproof as a submodule so that upstream additions are pulled automatically:
+
+```bash
+git submodule add https://github.com/C2SP/wycheproof.git tests/wycheproof
+```
+
+### RFC test vectors
+
+The following RFCs contain **normative** or **informative** test vectors directly applicable to this firmware:
+
+| RFC | Algorithm | Notes |
+|-----|-----------|-------|
+| RFC 5639 | Brainpool curve domain parameters | Authoritative parameter source for PKE prime configuration; must match before any other Brainpool test is trusted |
+| RFC 7027 | Brainpool ECDH in IKEv2 | ECDH key exchange vectors for P256r1, P384r1, P512r1 |
+| RFC 8734 | Brainpool in TLS 1.3 | ECDH and ECDSA vectors for all three Brainpool sizes; Appendix A covers 256-, 384-, and 512-bit curves |
+| RFC 8439 | ChaCha20-Poly1305 | Normative test vectors; primary KAT source for the AEAD path |
+| RFC 7748 | X25519 / X448 | Key exchange vectors for the X25519 PKE path |
+| RFC 8032 | Ed25519 / Ed448 | Sign and verify vectors for the boot chain signature algorithm |
+| RFC 5869 | HKDF | Extract-and-expand vectors with SHA-256 and SHA-512 |
+| RFC 6070 | PBKDF2-HMAC-SHA1 | KDF vectors; extend with SHA-256/512 variants from NIST CAVP |
+| RFC 4231 | HMAC-SHA2 | HMAC-SHA224/256/384/512 vectors |
+| RFC 2286 | HMAC-RIPEMD-160 | HMAC-RIPEMD-160 vectors for OpenPGP legacy path |
+
+### BSI specifications
+
+The **BSI** (Bundesamt für Sicherheit in der Informationstechnik) is the originating body for **Brainpool** curves and produces algorithm guidance independent of NSA-influenced standards.
+
+**BSI TR-03111 (Elliptic Curve Cryptography)**  
+Defines ECC operations over Brainpool curves including **ECDSA** and **ECIES-style** constructions. Test vectors and parameter requirements in TR-03111 are the **authoritative BSI source** for the firmware’s extended Brainpool profile and ECIES-style encrypt/decrypt flows.
+
+**BSI TR-02102-1 (Cryptographic mechanisms)**  
+Algorithm and key-length recommendations. Useful as a **checklist** that the firmware’s chosen key sizes and modes meet current European guidance without relying solely on NIST SP 800-57.
+
+**BSI AIS 20/31 version 3.0 (2024)**  
+Evaluation methodology for true and **deterministic** random number generators. The Baochip-1x carries a dedicated **ring-oscillator TRNG**; **AIS 20/31 Procedure B** (tests T6–T8 on the raw noise source) and **Procedure A** (tests T0–T5 on internal random numbers) apply at **hardware bring-up**. Run the BSI test suite ([ais31-testsuite-v1.0](https://github.com/mjosaarinen/ais31-testsuite-v1.0)) against **raw TRNG output** before the TRNG feeds any key generation path.
+
+### Blake2 and Blake3
+
+No standardised external KAT source equivalent to CAVP or Wycheproof covers these. Use the **official reference vectors**:
+
+- **Blake2:** `KAT/blake2b-kat.txt` and `blake2s-kat.txt` from the [BLAKE2](https://github.com/BLAKE2/BLAKE2) reference implementation repository.
+- **Blake3:** the `test_vectors/` directory in [BLAKE3](https://github.com/BLAKE3-team/BLAKE3).
+
+### Post-quantum KEMs (BIKE and NTRU, if compiled in)
+
+**liboqs** ships known-answer test (KAT) `.req` / `.rsp` file pairs for each algorithm, generated from the upstream reference implementations. Run the **liboqs KAT harness** against any **BIKE** or **NTRU** build to confirm the on-device implementation matches the reference. No external standardised vector source exists for these algorithms beyond the **liboqs** and **PQClean** KAT files.
+
+### Suggested test layering
+
+```
+Layer 1 — algorithm KATs (host-side, no hardware required)
+  RFC vectors + Wycheproof + CAVP (where applicable) + Blake2/3 reference
+  vectors + liboqs KATs (if PQC is compiled in).
+  Purpose: catch logic errors in software implementations cheaply.
+
+Layer 2 — hardware accelerator validation
+  RFC 5639 + RFC 8734 + BSI TR-03111 vectors run through the PKE block.
+  Purpose: confirm correct prime loading, Montgomery parameters, and field
+  arithmetic for each Brainpool curve size.
+
+Layer 3 — TRNG quality
+  BSI AIS 20/31 v3.0 Procedures A and B on raw TRNG output.
+  Purpose: confirm the ring-oscillator entropy source meets the min-entropy
+  requirements before it feeds key generation.
+
+Layer 4 — integration and interoperability
+  End-to-end GnuPG / OpenPGP round-trip tests with gpg on the host.
+  Wycheproof edge cases exercised through the full firmware stack.
+
+Layer 5 — adversarial
+  Fuzzing of USB and protocol parsers.
+  Side-channel review of the software ChaCha20-Poly1305 path on VexRiscv.
+```
+
+### References for this section
+
+- NIST CAVP: [https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program](https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program)
+- Wycheproof: [https://github.com/C2SP/wycheproof](https://github.com/C2SP/wycheproof)
+- BSI TR-03111: [https://www.bsi.bund.de/tr03111](https://www.bsi.bund.de/tr03111)
+- BSI TR-02102-1: [https://www.bsi.bund.de/tr02102](https://www.bsi.bund.de/tr02102)
+- BSI AIS 20/31 v3.0 (2024): [https://www.bsi.bund.de/ais31](https://www.bsi.bund.de/ais31)
+- Blake2 reference vectors: [https://github.com/BLAKE2/BLAKE2](https://github.com/BLAKE2/BLAKE2)
+- BLAKE3 test vectors: [https://github.com/BLAKE3-team/BLAKE3](https://github.com/BLAKE3-team/BLAKE3)
+- liboqs KAT harness: [https://github.com/open-quantum-safe/liboqs](https://github.com/open-quantum-safe/liboqs)
+
+---
+
 ## Repository role
 
 When implementation begins, this repository is **intended to hold** **firmware** (boot stages beyond public RTL if applicable, Xous services, USB personalities, vault layout, and test harnesses). It will **not** replace open RTL, bootloader sources, or the Xous tree; those remain upstream with reproducible build instructions published alongside releases.
@@ -415,6 +551,7 @@ When implementation begins, this repository is **intended to hold** **firmware**
 
 ## References
 
+- **Cryptographic testing (KATs, Wycheproof, BSI, layering):** [Cryptographic testing and test vectors](#cryptographic-testing-and-test-vectors).
 - **GnuPG / OpenPGP:** [GnuPG](https://gnupg.org/) and the OpenPGP specifications as implemented by `gpg` for interoperability targets.
 - **OpenSSL:** [OpenSSL](https://www.openssl.org/) — optional **software** source for many classical primitives when not using or cross-checking silicon paths (see [OpenSSL, libsodium (NaCl), and similar libraries](#openssl-libsodium-nacl-and-similar-libraries)).
 - **libsodium (NaCl-style):** [libsodium](https://libsodium.gitbook.io/) — optional **software** source for ChaCha20-Poly1305, X25519, Ed25519, and related APIs.
