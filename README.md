@@ -30,7 +30,7 @@ This document outlines firmware for **USB hardware security tokens** and protect
   - [Digests, MAC, and key derivation](#digests-mac-and-key-derivation)
   - [Shamir secret sharing (firmware)](#shamir-secret-sharing-firmware)
   - [Authenticated ephemeral ECDH (recommended session model)](#authenticated-ephemeral-ecdh-recommended-session-model)
-  - [Ephemeral ECDH and Shamir: gap in commercial tokens (creators’ knowledge)](#ephemeral-ecdh-and-shamir-gap-in-commercial-tokens-creators-knowledge)
+  - [Ephemeral ECDH and Shamir: gap in commercial tokens (creators' knowledge)](#ephemeral-ecdh-and-shamir-gap-in-commercial-tokens-creators-knowledge)
   - [Optional / profile-gated features](#optional-profile-gated-features)
 - [Adding new curves and algorithms](#adding-new-curves-and-algorithms)
   - [Integrating classical curves on the PKE engine](#integrating-classical-curves-on-the-pke-engine)
@@ -45,6 +45,7 @@ This document outlines firmware for **USB hardware security tokens** and protect
   - [Suggested implementation path](#suggested-implementation-path)
   - [Toolchain and development tools](#toolchain-and-development-tools)
   - [Verified flashing and updates](#verified-flashing-and-updates)
+  - [Programmatic entry into update mode (soft reset)](#programmatic-entry-into-update-mode-soft-reset)
 - [Cryptographic testing and test vectors](#cryptographic-testing-and-test-vectors)
   - [NIST CAVP](#nist-cavp)
   - [Wycheproof](#wycheproof)
@@ -151,7 +152,7 @@ The device presents as a **standard USB mass storage** volume. Optional PSRAM-ba
 
 ### Informed host (custom protocol or driver)
 
-With a **vendor or integrator-supplied** driver or userspace component that speaks the token’s protocol, the host can:
+With a **vendor or integrator-supplied** driver or userspace component that speaks the token's protocol, the host can:
 
 1. Recognise the device class or protocol extension.
 2. Issue a challenge for a **minimum 5-character alphanumeric passphrase** (policy may enforce longer secrets).
@@ -179,7 +180,7 @@ A future implementation would use the **Baochip-1x accelerators** where applicab
 | Library | Typical coverage relevant here | Role on Baochip-1x (illustrative) |
 |---------|-------------------------------|-----------------------------------|
 | **OpenSSL** / **LibreSSL** | **AES**, **SHA-2** / **SHA-3**, **HMAC**, **HKDF**, **PBKDF2**, **RSA**, **EC** (including **Brainpool** where enabled in the build), **ChaCha20-Poly1305** (in current OpenSSL branches), **X25519** / **Ed25519** via EVP, and wide **OpenPGP-adjacent** interoperability | **Software fallback** where **PKE** / **ComboHash** / **AES** do not apply; **reference** or **cross-check** implementations; algorithms **not** exposed in silicon (e.g. some legacy OpenPGP ciphers). Full OpenSSL on **RV32** may be **large**; **trimmed** builds or **per-algorithm** use (e.g. only EVP paths you enable) are common on tokens. |
-| **libsodium** (“**NaCl**” API) | **ChaCha20-Poly1305**, **X25519**, **Ed25519**, **Argon2**, **generichash** / **crypto_box**-style constructions | Strong fit for the README’s **Bernstein**-curve and **ChaCha** preferences; often **smaller** than linking all of OpenSSL when you only need those **modern** primitives. Does **not** replace the full **OpenPGP** surface by itself—pair with OpenSSL or **custom** code for **RSA**, **Brainpool**, **Camellia**, etc., as needed. |
+| **libsodium** ("**NaCl**" API) | **ChaCha20-Poly1305**, **X25519**, **Ed25519**, **Argon2**, **generichash** / **crypto_box**-style constructions | Strong fit for the README's **Bernstein**-curve and **ChaCha** preferences; often **smaller** than linking all of OpenSSL when you only need those **modern** primitives. Does **not** replace the full **OpenPGP** surface by itself—pair with OpenSSL or **custom** code for **RSA**, **Brainpool**, **Camellia**, etc., as needed. |
 | **liboqs** | **Post-quantum** KEMs and signatures (see [Adding new curves and algorithms](#adding-new-curves-and-algorithms)) | **PQC** paths; separate from classical **TLS-style** stacks unless composed with **HKDF** hybrids. |
 
 **Practice:** Prefer **hardware** (**PKE**, **ComboHash**, **AES**, **TRNG**) when **validated** on silicon and **policy** allows—**lower CPU** and clearer **acceleration** story. Use **OpenSSL** / **libsodium** for **gaps**, for **algorithms** the blocks do not implement, and for **tests** (known-answer vectors, interop with `gpg`). If both HW and software can compute the same secret operation, define **one** authoritative path per **firmware profile** and use the other only for **verification** or **development**, to avoid **divergent** behavior.
@@ -250,9 +251,9 @@ Use **long-term** OpenPGP / GnuPG keys **only to authenticate** an additional **
 
 The **Ephemeral ECDH on-device** row in [Requirement mapping](#requirement-mapping) is **intended** to cover implementing that pattern with MMU-isolated Xous components and secure erasure of ephemeral material once firmware is built.
 
-### Ephemeral ECDH and Shamir: gap in commercial tokens (creators’ knowledge)
+### Ephemeral ECDH and Shamir: gap in commercial tokens (creators' knowledge)
 
-To the **creators’ knowledge**, as of **25 March 2026**, **no hardware security device** they are aware of supports **ephemeral key pairs** (in the authenticated ephemeral ECDH sense above) **or** **Shamir’s secret** sharing as first-class on-token features at the time of writing. This project **aims** to close that gap on **Baochip-1x** through open firmware once implemented. Other products may add such capabilities later; integrators should verify current vendor documentation.
+To the **creators' knowledge**, as of **25 March 2026**, **no hardware security device** they are aware of supports **ephemeral key pairs** (in the authenticated ephemeral ECDH sense above) **or** **Shamir's secret** sharing as first-class on-token features at the time of writing. This project **aims** to close that gap on **Baochip-1x** through open firmware once implemented. Other products may add such capabilities later; integrators should verify current vendor documentation.
 
 ### Optional / profile-gated features
 
@@ -293,32 +294,32 @@ Several algorithms developed independently of the NSA are widely used:
 
 ### Known scandals involving the NSA and cryptography
 
-Several scandals and controversies have surrounded the NSA’s involvement in cryptography, revealing concerns about security, privacy, and possible manipulation of standards. Here are some key incidents:
+Several scandals and controversies have surrounded the NSA's involvement in cryptography, revealing concerns about security, privacy, and possible manipulation of standards. Here are some key incidents:
 
 | Incident | Description |
 |----------|-------------|
-| **NSA’s involvement in Dual_EC_DRBG** | This random number generator was adopted by NIST but later revealed to be potentially compromised by the NSA, raising suspicions of backdoors. |
+| **NSA's involvement in Dual_EC_DRBG** | This random number generator was adopted by NIST but later revealed to be potentially compromised by the NSA, raising suspicions of backdoors. |
 | **PRISM** | Exposed by Edward Snowden in 2013, revealing that the NSA collects data from major tech companies, including communications encrypted using NSA-influenced standards. |
-| **Clapper’s misleading testimony** | Then-Director James Clapper’s testimony before Congress in 2013 was scrutinized after revelations about extensive surveillance practices came to light. |
+| **Clapper's misleading testimony** | Then-Director James Clapper's testimony before Congress in 2013 was scrutinized after revelations about extensive surveillance practices came to light. |
 | **Clipper Chip** | Launched in the early 1990s, it aimed to provide secure phone communication but faced backlash due to mandatory key escrow, which many viewed as a significant privacy infringement. |
-| **SHA-1 deprecation** | The SHA-1 hashing algorithm, once endorsed by the NSA, was later found vulnerable, leading to its deprecation and questions about the NSA’s early assessments of its security. |
+| **SHA-1 deprecation** | The SHA-1 hashing algorithm, once endorsed by the NSA, was later found vulnerable, leading to its deprecation and questions about the NSA's early assessments of its security. |
 
-**Summary:** These incidents highlight significant concerns regarding the NSA’s influence in cryptography and the potential implications for security and privacy. The revelations have fostered a mistrust of cryptographic standards and increased the demand for independent auditing and verification of cryptographic algorithms.
+**Summary:** These incidents highlight significant concerns regarding the NSA's influence in cryptography and the potential implications for security and privacy. The revelations have fostered a mistrust of cryptographic standards and increased the demand for independent auditing and verification of cryptographic algorithms.
 
 ---
 
 ## Adding new curves and algorithms
 
-This README’s **design bias** is to prefer **non-NSA-influenced** classical options where practical (**Brainpool** over default NIST ECC profiles, **ChaCha20** over **AES** when hardware or policy favors it), as discussed in [Cryptographic algorithm background](#cryptographic-algorithm-background). The same bias extends to **new** primitives: add curves and post-quantum (PQC) schemes deliberately, with test vectors, code review, and explicit **firmware profiles** so users know what is enabled.
+This README's **design bias** is to prefer **non-NSA-influenced** classical options where practical (**Brainpool** over default NIST ECC profiles, **ChaCha20** over **AES** when hardware or policy favors it), as discussed in [Cryptographic algorithm background](#cryptographic-algorithm-background). The same bias extends to **new** primitives: add curves and post-quantum (PQC) schemes deliberately, with test vectors, code review, and explicit **firmware profiles** so users know what is enabled.
 
 ### Integrating classical curves on the PKE engine
 
 For **prime-field ECC** supported by the **algorithm-agnostic PKE** block:
 
-1. Obtain the curve’s **256-bit prime** (field characteristic) and curve parameters from a **normative** source (RFC, BSI, etc.).
+1. Obtain the curve's **256-bit prime** (field characteristic) and curve parameters from a **normative** source (RFC, BSI, etc.).
 2. Program **N0Dat** and related configuration per silicon documentation; let the block compute the **Montgomery** reduction parameter at runtime where the RTL allows.
 3. Run **validation** against known test vectors (RFC 5639 for Brainpool, etc.) on real hardware before exposing the curve in a product profile.
-4. If the prime does not fit the engine’s fixed-width model or fails validation, implement the curve in **software** on the VexRiscv (slower, but keeps the option open).
+4. If the prime does not fit the engine's fixed-width model or fails validation, implement the curve in **software** on the VexRiscv (slower, but keeps the option open).
 
 **Non-ECC** additions (e.g. extra hash modes in **ComboHash**, new AEAD composition) follow the same pattern: **hardware path** when the block supports it, **software** otherwise, with **HKDF** / **info** strings versioned in a central policy table.
 
@@ -331,9 +332,9 @@ The following are **illustrative** candidates that fit the **conservative / less
 | **XMSS** or **LMS** | Post-quantum **signatures** | **Hash-based**, IETF-standardized (e.g. HSS/LMS, XMSS in RFC documents), **no algebraic structure** comparable to number-theoretic PQC; already considered in **firmware-signing** and long-term archival contexts. |
 | **Classic McEliece** | PQC **KEM** (key encapsulation) | **Code-based**, long **independent** cryptanalysis history; often viewed as the most **conservative** lattice-free PQC KEM choice (large public keys). |
 | **FrodoKEM** | Alternative PQC **KEM** | **Unstructured lattices**; often seen as **more conservative** than **Kyber (ML-KEM)** with respect to **algebraic structure** and **NIST process entanglement** in its design narrative—at the cost of larger messages and runtime. |
-| **Hybrid key establishment** | Session / long-term protection | Combine a PQC KEM with **X25519** (Bernstein curve, **non-NIST**) rather than hybridizing with **NIST** ECC only, so the classical leg matches the rest of this README’s preferences. Derive the combined secret with **HKDF** and **clear domain separation** (`info` labels per protocol version). |
+| **Hybrid key establishment** | Session / long-term protection | Combine a PQC KEM with **X25519** (Bernstein curve, **non-NIST**) rather than hybridizing with **NIST** ECC only, so the classical leg matches the rest of this README's preferences. Derive the combined secret with **HKDF** and **clear domain separation** (`info` labels per protocol version). |
 
-OpenPGP and GnuPG **interop** may still require **ML-KEM / ML-DSA** (or other NIST-standard PQC) in some profiles; those can be **optional firmware profiles** distinct from the “philosophy default” set above.
+OpenPGP and GnuPG **interop** may still require **ML-KEM / ML-DSA** (or other NIST-standard PQC) in some profiles; those can be **optional firmware profiles** distinct from the "philosophy default" set above.
 
 ### liboqs and explicit algorithm selection
 
@@ -383,7 +384,7 @@ Expect to combine **RISC-V** embedded tooling with **Rust** (Xous ecosystem) and
 | **Version control** | `git`; **signed tags** for releases |
 | **Documentation** | Specs from silicon/board maintainers (memory map, register descriptions, update protocol) |
 
-The board vendor’s published **SDK, flashing utility, and TRM** supersede any guess in this table once released.
+The board vendor's published **SDK, flashing utility, and TRM** supersede any guess in this table once released.
 
 ### Verified flashing and updates
 
@@ -392,7 +393,7 @@ The board vendor’s published **SDK, flashing utility, and TRM** supersede any 
 **On-device verification (primary defense)**
 
 - **Signed images only** — Boot1 and subsequent layers should be accepted only if **Ed25519** (or policy-defined) signatures verify against **keys burned or provisioned** under the product policy (see [Boot chain security model](#boot-chain-security-model)).
-- **No “raw” production flash** — Production workflow should refuse to install an image that fails cryptographic verification; development keys must be **distinct** from retail keys.
+- **No "raw" production flash** — Production workflow should refuse to install an image that fails cryptographic verification; development keys must be **distinct** from retail keys.
 - **Measured boot / sealed storage (optional)** — Derive vault keys or attestation from a hash of the boot chain so a tampered image cannot unlock the same secrets without detection (design detail for a later spec).
 
 **Off-device verification (what the user or integrator can do)**
@@ -409,16 +410,69 @@ The board vendor’s published **SDK, flashing utility, and TRM** supersede any 
 **Limits of software-only assurance**
 
 - **Boot0** and **ROM masks** are trusted by definition; **IRIS** / open-RTL review and **wafer-probe** process controls address that layer, not application code.
-- **Physical attackers** with lab equipment may attempt **fault injection**; the chip’s **glitch sensors**, **mesh**, and **boot0 zeroisation** path reduce but do not abolish that threat model.
+- **Physical attackers** with lab equipment may attempt **fault injection**; the chip's **glitch sensors**, **mesh**, and **boot0 zeroisation** path reduce but do not abolish that threat model.
 - If the **signing keys** for updates are compromised, valid signatures can be produced for malicious firmware—**key custody**, **HSMs**, and **multi-party** signing reduce that risk.
 
 Together, **signature verification in boot ROM / boot1**, **signed releases with reproducible builds**, and **A/B verified updates** form a practical integrity story for flashing and field updates once this firmware exists.
+
+### Programmatic entry into update mode (soft reset)
+
+It is confirmed from the boot1 source code (xous-core `bao1x-boot/boot1`) that firmware updates can be triggered **entirely programmatically**, without pressing the physical RESET or PROG buttons. The Dabao board has two physical buttons — **PROG** (closest to USB) and **RESET** (farthest from USB) — but both are optional for update workflows once the device is running.
+
+**Step 1 — Signal boot1 to wait for an update**
+
+From a running Xous application, increment the `BootWaitCoding` one-way counter to `Enable`. Because `BootWaitCoding` is stored in RRAM as a one-way counter, it cycles through states with each increment; the application must advance it to the correct state:
+
+```rust
+let one_way = bao1x_hal::acram::OneWayCounter::new();
+while one_way.get_decoded::<bao1x_api::BootWaitCoding>()?
+    != bao1x_api::BootWaitCoding::Enable
+{
+    one_way.inc_coded::<bao1x_api::BootWaitCoding>()?;
+}
+```
+
+This is also available as the `bootwait enable` command in the boot1 serial REPL if the device is already in update mode.
+
+**Step 2 — Trigger a soft reset**
+
+Write the magic value `0x55AA` to `SFR_RCURST0` in the `sysctrl` block:
+
+```rust
+let mut rcurst = CSR::new(utra::sysctrl::HW_SYSCTRL_BASE as *mut u32);
+rcurst.wo(utra::sysctrl::SFR_RCURST0, 0x55AA);
+```
+
+This is also available as the `reset` command in the boot1 serial REPL.
+
+On the next boot, boot1 reads `BootWaitCoding::Enable`, skips `try_boot()`, and enters the USB mass storage / serial REPL loop — ready to receive firmware without any physical button interaction.
+
+**Step 3 — Flash the firmware**
+
+Once in update mode, there are two software-only paths to flash firmware:
+
+- **USB mass storage** — Copy a `.uf2` file to the `BAOCHIP` volume that appears on the host. No special driver is required. The device validates the UF2 family ID (`BAOCHIP_1X_UF2_FAMILY`) and write address before committing to RRAM.
+- **Serial REPL `uf2` command** — Send base64-encoded UF2 blocks directly over the USB serial console, bypassing mass storage enumeration entirely. This is suitable for automated or OTA-style updates:
+
+  ```
+  uf2 <base64-encoded UF2 block>
+  ```
+
+The REPL also exposes a `boot` command to exit update mode and resume normal application boot without a power cycle, and a `reset` command to issue another soft reset.
+
+**Important caveats**
+
+- `BootWaitCoding` is a **one-way counter** stored in RRAM with a wear limit of approximately 100,000 increments. It cycles through states (`Disable` → `Enable` → `Disable` → …); an application must advance it to the correct target state, not simply increment once blindly.
+- The `warm_boot` flag in `BackupManager` (backup registers / AORAM) causes boot1 to **skip** the update loop and boot directly into the application — it is the **opposite** of entering update mode.
+- All images accepted by boot1 must pass **Ed25519 signature verification** against the keys burned into the device. Raw unverified flashing is not possible on production parts. Use the developer key for development builds and ensure production images are signed with the appropriate retail key.
+- On `baosec` boards, the developer key is revoked at the factory (`lockdown` is run during manufacturing), which restricts accepted signing keys to non-developer slots. Use the appropriate signing key for the target SKU.
+- The `uf2` REPL command validates the UF2 write address against `BAREMETAL_START` and `RRAM_STORAGE_LEN` bounds and checks the `BAOCHIP_1X_UF2_FAMILY` identifier before writing. Blocks outside these bounds are silently ignored.
 
 ---
 
 ## Cryptographic testing and test vectors
 
-This section maps **test vector sources** to each algorithm in the firmware’s **planned cryptographic profile**. Using a **known-answer test (KAT)** vector does **not** imply endorsement of the body that produced it—the vectors are **numbers**, and their correctness can be verified **independently**.
+This section maps **test vector sources** to each algorithm in the firmware's **planned cryptographic profile**. Using a **known-answer test (KAT)** vector does **not** imply endorsement of the body that produced it—the vectors are **numbers**, and their correctness can be verified **independently**.
 
 ### NIST CAVP
 
@@ -483,13 +537,13 @@ The following RFCs contain **normative** or **informative** test vectors directl
 
 The **BSI** (Bundesamt für Sicherheit in der Informationstechnik) is the originating body for **Brainpool** curves and produces algorithm guidance independent of NSA-influenced standards.
 
-**BSI TR-03111 (Elliptic Curve Cryptography)**  
-Defines ECC operations over Brainpool curves including **ECDSA** and **ECIES-style** constructions. Test vectors and parameter requirements in TR-03111 are the **authoritative BSI source** for the firmware’s extended Brainpool profile and ECIES-style encrypt/decrypt flows.
+**BSI TR-03111 (Elliptic Curve Cryptography)**
+Defines ECC operations over Brainpool curves including **ECDSA** and **ECIES-style** constructions. Test vectors and parameter requirements in TR-03111 are the **authoritative BSI source** for the firmware's extended Brainpool profile and ECIES-style encrypt/decrypt flows.
 
-**BSI TR-02102-1 (Cryptographic mechanisms)**  
-Algorithm and key-length recommendations. Useful as a **checklist** that the firmware’s chosen key sizes and modes meet current European guidance without relying solely on NIST SP 800-57.
+**BSI TR-02102-1 (Cryptographic mechanisms)**
+Algorithm and key-length recommendations. Useful as a **checklist** that the firmware's chosen key sizes and modes meet current European guidance without relying solely on NIST SP 800-57.
 
-**BSI AIS 20/31 version 3.0 (2024)**  
+**BSI AIS 20/31 version 3.0 (2024)**
 Evaluation methodology for true and **deterministic** random number generators. The Baochip-1x carries a dedicated **ring-oscillator TRNG**; **AIS 20/31 Procedure B** (tests T6–T8 on the raw noise source) and **Procedure A** (tests T0–T5 on internal random numbers) apply at **hardware bring-up**. Run the BSI test suite ([ais31-testsuite-v1.0](https://github.com/mjosaarinen/ais31-testsuite-v1.0)) against **raw TRNG output** before the TRNG feeds any key generation path.
 
 ### Blake2 and Blake3
